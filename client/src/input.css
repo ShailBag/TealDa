@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  background: radial-gradient(ellipse 80% 60% at 50% -20%, rgba(14, 165, 233, 0.12), transparent), #f8fafc;
+}
+
+@keyframes buyCompleteFlash {
+  0% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.45);
+    background-color: rgba(209, 250, 229, 0.9);
+  }
+  60% {
+    box-shadow: 0 0 0 10px rgba(16, 185, 129, 0);
+    background-color: rgba(236, 253, 245, 0.95);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+    background-color: #ffffff;
+  }
+}
+
+.buy-complete-flash {
+  animation: buyCompleteFlash 1.2s ease-out 1;
+}
+
+@keyframes sellCompleteFlash {
+  0% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.45);
+    background-color: rgba(219, 234, 254, 0.95);
+  }
+  60% {
+    box-shadow: 0 0 0 10px rgba(59, 130, 246, 0);
+    background-color: rgba(239, 246, 255, 0.98);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+    background-color: #ffffff;
+  }
+}
+
+.sell-complete-flash {
+  animation: sellCompleteFlash 1.2s ease-out 1;
+}
