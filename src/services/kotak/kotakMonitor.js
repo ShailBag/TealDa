@@ -3,7 +3,7 @@
 const WebSocket = require('ws');
 const hsmProtocol = require('./hsmProtocol');
 const hsmParser = require('./hsmParser');
-const { fetchOrders } = require('./orderApi');
+const { fetchOrders, placeOrder } = require('./orderApi');
 const { login } = require('./session');
 const H = require('./orderHelpers');
 
@@ -110,7 +110,7 @@ class KotakMonitor {
     const displayBuy = this.pickBuyForDisplay();
     const sell = this.latestSell;
     const buyPrice = anchorBuy ? H.getOrderPrice(anchorBuy) : NaN;
-    const ltp = this.hasOpenPositionForCurrentBuy && this.optionLtp != null ? Number(this.optionLtp) : null;
+    const ltp = this.optionLtp != null ? Number(this.optionLtp) : null;
     const lotSize = anchorBuy ? H.getLotSizeForOrder(anchorBuy, this.env) : Number(this.env.KOTAK_NIFTY_LOT_SIZE || 25);
     const qtyRaw = anchorBuy ? H.getOrderQtyRaw(anchorBuy) : null;
     const qty = qtyRaw != null ? Number(qtyRaw) : 0;
@@ -324,7 +324,9 @@ class KotakMonitor {
   }
 
   syncMonitoredScript() {
-    const buy = this.openPositionBuy || this.latestBuy;
+    // Keep LTP on the script that was actually traded:
+    // open position first, otherwise last completed buy.
+    const buy = this.openPositionBuy || this.lastCompletedBuy || this.latestBuy;
     if (!buy) {
       this.monitoredScriptKey = null;
       return;
@@ -450,6 +452,46 @@ class KotakMonitor {
       this.lastError = '[poll] ' + err.message;
       this.emit();
     }
+  }
+
+  async placeManualSell(limitPrice) {
+    if (!this.auth) throw new Error('Not authenticated');
+    if (!Number.isFinite(limitPrice) || limitPrice <= 0) throw new Error('Invalid sell price');
+    if (!this.hasOpenPositionForCurrentBuy) throw new Error('No open buy position available');
+    if (this.hasOpenSellForCurrentBuy) throw new Error('Open sell order already exists for current buy');
+
+    const buy = this.openPositionBuy || this.latestBuy;
+    if (!buy) throw new Error('No buy order available');
+
+    const qtyRaw = H.getOrderQtyRaw(buy);
+    const qty = qtyRaw != null ? Number(qtyRaw) : NaN;
+    if (!Number.isFinite(qty) || qty <= 0) throw new Error('Invalid buy quantity');
+
+    const body = {
+      am: 'NO',
+      dq: '0',
+      es: String(buy.exSeg ?? buy.exchSeg ?? buy.es ?? 'bse_fo'),
+      mp: '0',
+      pc: String(buy.prod ?? buy.product ?? 'NRML'),
+      pf: 'N',
+      pr: Number(limitPrice).toFixed(2),
+      pt: 'L',
+      qt: String(qty),
+      rt: 'DAY',
+      tp: '0',
+      ts: String(buy.trdSym ?? buy.tsym ?? buy.sym ?? ''),
+      tt: 'S'
+    };
+
+    const resp = await placeOrder({
+      accessToken: this.auth.accessToken,
+      validatedToken: this.auth.validatedToken,
+      sid: this.auth.sid,
+      body
+    });
+
+    await this.pollOrdersRest();
+    return resp;
   }
 
   connectHsi() {

@@ -21,6 +21,10 @@ let prevSellOrderNo = '';
 let prevSellStatus = '';
 let sellFlashUntilMs = 0;
 let audioCtx = null;
+let manualSellPriceByOrder = {};
+let manualSellSubmitting = false;
+let manualSellError = '';
+let manualSellOk = '';
 
 function beep(times = 2) {
   try {
@@ -83,6 +87,12 @@ function pillClass(status) {
   return 'bg-slate-100 text-slate-700 ring-1 ring-slate-300';
 }
 
+function inputPrice(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return '';
+  return String(Math.round(x));
+}
+
 function render(state) {
   const root = document.getElementById('app');
   const buy = state.buy;
@@ -93,8 +103,9 @@ function render(state) {
   const position = state.position || {};
   const hasOpenPosition = !!position.hasOpenPosition;
   const hasCorrespondingSell = !!position.hasCorrespondingSell;
-  const showNoSellOrder = hasOpenPosition && !hasCorrespondingSell;
   const sellStatus = String((sell && sell.status) || '').toLowerCase();
+  const sellIsCancelled = sellStatus.includes('cancel');
+  const showNoSellOrder = hasOpenPosition && (!hasCorrespondingSell || sellIsCancelled);
   const onlyLiveLtp = !!pnl.onlyLiveLtp;
   const realizedAvailable = !!pnl.realizedAvailable;
   // Keep values visible whenever there is an open position.
@@ -106,8 +117,16 @@ function render(state) {
   const buyStatus = String((buy && buy.status) || '').toLowerCase();
   const isOpenBuy = buyStatus.includes('open') || buyStatus.includes('pending') || buyStatus.includes('trigger') || buyStatus.includes('validation');
   const buyHeading = isOpenBuy ? 'BUY ORDER' : 'LAST BUY ORDER';
-
   const buyOrderNo = String((buy && buy.nOrdNo) || '');
+  const defaultSellPrice = buy && Number.isFinite(Number(buy.price)) ? (Number(buy.price) + 5) : NaN;
+  const sellInputKey = buyOrderNo || 'default';
+  const activeEl = document.activeElement;
+  const wasEditingSell = !!(activeEl && activeEl.id === 'manualSellPrice');
+  const prevSelectionStart = wasEditingSell && activeEl.selectionStart != null ? activeEl.selectionStart : null;
+  const prevSelectionEnd = wasEditingSell && activeEl.selectionEnd != null ? activeEl.selectionEnd : null;
+  const currentSellInput = wasEditingSell
+    ? String(activeEl.value || '')
+    : (manualSellPriceByOrder[sellInputKey] ?? inputPrice(defaultSellPrice));
   const buyNowComplete = !!buy && isCompleteStatus(buyStatus);
   const buyWasComplete = isCompleteStatus(prevBuyStatus);
   const isTransitionToComplete =
@@ -191,7 +210,19 @@ function render(state) {
               <div class="text-xs text-slate-500">Order #${escapeHtml(sell.nOrdNo)}</div>
             </div>
           `
-              : `<p class="text-red-600 text-3xl sm:text-4xl font-bold leading-tight">No Sell Order present</p>`
+              : `<div class="space-y-4">
+                  <p class="text-red-600 text-3xl sm:text-4xl font-bold leading-tight">No Sell Order present</p>
+                  <div class="max-w-sm">
+                    <label for="manualSellPrice" class="block text-xs text-slate-500 mb-1">Enter sell price</label>
+                    <div class="flex gap-2">
+                      <input id="manualSellPrice" type="text" inputmode="numeric" pattern="[0-9]*" value="${escapeHtml(currentSellInput)}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-slate-800 focus:outline-none focus:ring-2 focus:ring-cyan-300" />
+                      <button id="placeManualSellBtn" type="button" ${manualSellSubmitting ? 'disabled' : ''} class="rounded-lg bg-cyan-600 text-white px-4 py-2 text-sm font-semibold disabled:opacity-60">${manualSellSubmitting ? 'Placing...' : 'Place Sell'}</button>
+                    </div>
+                    <p class="mt-1 text-[11px] text-slate-500">Default = Buy price + 5</p>
+                    ${manualSellError ? `<p class="mt-1 text-xs text-rose-600">${escapeHtml(manualSellError)}</p>` : ''}
+                    ${manualSellOk ? `<p class="mt-1 text-xs text-emerald-600">${escapeHtml(manualSellOk)}</p>` : ''}
+                  </div>
+                </div>`
           }
         </section>
 
@@ -319,6 +350,55 @@ function render(state) {
       </footer>
     </div>
   `;
+
+  if (showNoSellOrder) {
+    const inputEl = document.getElementById('manualSellPrice');
+    const btnEl = document.getElementById('placeManualSellBtn');
+    if (wasEditingSell && inputEl) {
+      inputEl.focus();
+      if (prevSelectionStart != null && prevSelectionEnd != null) {
+        try { inputEl.setSelectionRange(prevSelectionStart, prevSelectionEnd); } catch (_) {}
+      }
+    }
+    if (inputEl) {
+      inputEl.addEventListener('input', (e) => {
+        manualSellPriceByOrder[sellInputKey] = e.target.value;
+      });
+    }
+    if (btnEl && inputEl) {
+      btnEl.addEventListener('click', async () => {
+        const raw = String(inputEl.value || '').trim();
+        if (!/^\d+$/.test(raw)) {
+          manualSellError = 'Please enter sell price as whole number';
+          manualSellOk = '';
+          render(state);
+          return;
+        }
+        const p = Number(raw);
+        manualSellSubmitting = true;
+        manualSellError = '';
+        manualSellOk = '';
+        render(state);
+        try {
+          const resp = await fetch('/api/orders/sell', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ price: p })
+          });
+          const json = await resp.json();
+          if (!resp.ok || !json.ok) throw new Error((json && json.error) || 'Failed to place sell order');
+          manualSellOk = 'Sell order placed successfully';
+          manualSellError = '';
+        } catch (err) {
+          manualSellError = err.message || 'Failed to place sell order';
+          manualSellOk = '';
+        } finally {
+          manualSellSubmitting = false;
+          render(state);
+        }
+      });
+    }
+  }
 }
 
 function escapeHtml(s) {

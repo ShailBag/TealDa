@@ -42,6 +42,23 @@ app.get('/api/debug/indices', (_req, res) => {
   });
 });
 
+app.post('/api/orders/sell', async (req, res) => {
+  try {
+    const price = Number(req.body && req.body.price);
+    console.log('[manual-sell] request received', { price, hasBody: !!req.body });
+    if (!Number.isFinite(price) || price <= 0) {
+      console.warn('[manual-sell] invalid price', { raw: req.body && req.body.price });
+      return res.status(400).json({ ok: false, error: 'Invalid price' });
+    }
+    const out = await monitor.placeManualSell(price);
+    console.log('[manual-sell] order placement ok');
+    return res.json({ ok: true, data: out });
+  } catch (err) {
+    console.error('[manual-sell] order placement failed:', err.message);
+    return res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
 monitor
   .start()
   .catch((err) => {
