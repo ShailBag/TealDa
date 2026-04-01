@@ -20,6 +20,56 @@ let buyFlashUntilMs = 0;
 let prevSellOrderNo = '';
 let prevSellStatus = '';
 let sellFlashUntilMs = 0;
+let audioCtx = null;
+
+function beep(times = 2) {
+  try {
+    if (!window.AudioContext && !window.webkitAudioContext) return;
+    if (!audioCtx) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      audioCtx = new Ctx();
+    }
+    const now = audioCtx.currentTime;
+    for (let i = 0; i < times; i++) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 920;
+      gain.gain.value = 0.001;
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      const t0 = now + i * 0.22;
+      gain.gain.exponentialRampToValueAtTime(0.15, t0 + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.16);
+      osc.start(t0);
+      osc.stop(t0 + 0.18);
+    }
+  } catch (_) {}
+}
+
+function notifyBuyComplete(buy) {
+  const orderNo = String((buy && buy.nOrdNo) || '');
+  const symbol = String((buy && buy.symbol) || 'Unknown');
+  const price = buy && buy.price != null ? fmt(buy.price) : '?';
+  const qty = buy && buy.qty != null ? fmtInt(buy.qty) : '?';
+  const title = 'Buy Order Completed';
+  const body = `${symbol} | Qty ${qty} | Price ${price} | #${orderNo}`;
+
+  beep(2);
+
+  try {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'granted') {
+      new Notification(title, { body });
+      return;
+    }
+    if (Notification.permission === 'default') {
+      Notification.requestPermission().then((p) => {
+        if (p === 'granted') new Notification(title, { body });
+      }).catch(() => {});
+    }
+  } catch (_) {}
+}
 
 function isCompleteStatus(s) {
   const x = String(s || '').toLowerCase();
@@ -66,6 +116,7 @@ function render(state) {
     (buyOrderNo !== prevBuyOrderNo || !buyWasComplete);
   if (isTransitionToComplete) {
     buyFlashUntilMs = Date.now() + 1400;
+    notifyBuyComplete(buy);
   }
   prevBuyOrderNo = buyOrderNo;
   prevBuyStatus = buyStatus;
@@ -183,7 +234,16 @@ function render(state) {
           </div>
           ${
             showLiveOnly
-              ? ''
+              ? `
+          <div>
+            <div class="text-slate-500 text-xs mb-1">High LTP (since entry)</div>
+            <div class="text-3xl font-bold text-emerald-600 tabular-nums">${fmt(pnl.highLtpSinceEntry)}</div>
+          </div>
+          <div>
+            <div class="text-slate-500 text-xs mb-1">Low LTP (since entry)</div>
+            <div class="text-3xl font-bold text-rose-600 tabular-nums">${fmt(pnl.lowLtpSinceEntry)}</div>
+          </div>
+          `
               : `
           <div>
             <div class="text-slate-500 text-xs mb-1">${realizedAvailable ? 'Buy price' : 'Buy avg'}</div>
@@ -205,21 +265,16 @@ function render(state) {
             <div class="text-slate-500 text-xs mb-1">High LTP (since entry)</div>
             <div class="text-xl font-semibold text-emerald-600 tabular-nums">${fmt(pnl.highLtpSinceEntry)}</div>
           </div>
-          ${
-            realizedAvailable
-              ? ''
-              : `
           <div>
             <div class="text-slate-500 text-xs mb-1">Low LTP (since entry)</div>
             <div class="text-xl font-semibold text-rose-600 tabular-nums">${fmt(pnl.lowLtpSinceEntry)}</div>
-          </div>`
-          }
+          </div>
         </div>
+        `}
         <p class="text-xs text-slate-500 mt-4">
           Lot size ${pnl.lotSize ?? '?'} ? Effective units ${fmtInt(pnl.effectiveUnits)}
           ${pnl.entryActive ? '' : ' ? High/low track after buy <span class="text-amber-600">COMPLETE</span>'}
         </p>
-        `}
       </section>
 
       ${

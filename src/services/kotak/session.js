@@ -132,8 +132,17 @@ async function login(env) {
   const neoFinKey = env.KOTAK_NEO_FIN_KEY || 'neotradeapi';
   const authorization = env.KOTAK_AUTHORIZATION;
 
-  if (!mobileNumber || !ucc || !mpin || !totpSecret || !authorization) {
-    throw new Error('Missing KOTAK_* credentials in environment');
+  const missing = [];
+  if (!authorization) missing.push('KOTAK_AUTHORIZATION');
+  if (!mobileNumber) missing.push('KOTAK_MOBILE_NUMBER');
+  if (!ucc) missing.push('KOTAK_UCC');
+  if (!mpin) missing.push('KOTAK_MPIN');
+  if (!totpSecret) missing.push('KOTAK_TOTP_SECRET');
+  if (missing.length) {
+    throw new Error(
+      'Missing KOTAK_* credentials: ' + missing.join(', ') +
+        ' (or configure MySQL DB_* + valid tokens, or a valid KOTAK_SESSION_PATH file)'
+    );
   }
 
   const commonHeaders = { 'neo-fin-key': neoFinKey, Authorization: authorization };

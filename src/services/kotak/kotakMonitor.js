@@ -69,6 +69,8 @@ class KotakMonitor {
     this.onlyLiveLtp = false;
     this.lastCompletedSellForCurrentBuy = null;
     this.lastCompletedBuyForCurrentSell = null;
+    /** Most recent completed F&O index buy (by order id/time); for LAST BUY ORDER card */
+    this.lastCompletedBuy = null;
     this.lastIndexTicks = [];
     this.slHistory = [];
   }
@@ -82,6 +84,18 @@ class KotakMonitor {
     return this.buildSnapshot();
   }
 
+  /**
+   * Card shows open/pending buy when that is the newest buy; otherwise last completed buy
+   * (so rejected/cancelled newer orders do not replace filled trade details).
+   */
+  pickBuyForDisplay() {
+    const latest = this.latestBuy;
+    if (!latest) return this.lastCompletedBuy;
+    const st = H.normalizeOrdSt(H.pick(latest, 'ordSt', 'orderStatus', 'status', 'st'));
+    if (st === H.ORD_ST.OPEN || st === H.ORD_ST.VALIDATION_PENDING) return latest;
+    return this.lastCompletedBuy || latest;
+  }
+
   emit() {
     const snapshot = this.buildSnapshot();
     const j = JSON.stringify(snapshot);
@@ -92,12 +106,13 @@ class KotakMonitor {
   }
 
   buildSnapshot() {
-    const buy = this.latestBuy;
+    const anchorBuy = this.latestBuy;
+    const displayBuy = this.pickBuyForDisplay();
     const sell = this.latestSell;
-    const buyPrice = buy ? H.getOrderPrice(buy) : NaN;
+    const buyPrice = anchorBuy ? H.getOrderPrice(anchorBuy) : NaN;
     const ltp = this.hasOpenPositionForCurrentBuy && this.optionLtp != null ? Number(this.optionLtp) : null;
-    const lotSize = buy ? H.getLotSizeForOrder(buy, this.env) : Number(this.env.KOTAK_NIFTY_LOT_SIZE || 25);
-    const qtyRaw = buy ? H.getOrderQtyRaw(buy) : null;
+    const lotSize = anchorBuy ? H.getLotSizeForOrder(anchorBuy, this.env) : Number(this.env.KOTAK_NIFTY_LOT_SIZE || 25);
+    const qtyRaw = anchorBuy ? H.getOrderQtyRaw(anchorBuy) : null;
     const qty = qtyRaw != null ? Number(qtyRaw) : 0;
     const units = Number.isFinite(qty) ? qty : 0;
     const pointDiff = ltp != null && Number.isFinite(buyPrice) ? ltp - buyPrice : null;
@@ -105,7 +120,7 @@ class KotakMonitor {
       pointDiff != null && Number.isFinite(units) && units > 0 ? pointDiff * units : null;
 
     const completedSell = this.lastCompletedSellForCurrentBuy;
-    const matchedBuyForCompletedSell = this.lastCompletedBuyForCurrentSell || buy;
+    const matchedBuyForCompletedSell = this.lastCompletedBuyForCurrentSell || anchorBuy;
     const realizedBuyPrice = matchedBuyForCompletedSell ? H.getOrderPrice(matchedBuyForCompletedSell) : NaN;
     const completedSellPrice = completedSell ? H.getOrderPrice(completedSell) : NaN;
     const pointsTaken =
@@ -113,7 +128,7 @@ class KotakMonitor {
     const lastTradePnlRs =
       pointsTaken != null && Number.isFinite(units) && units > 0 ? pointsTaken * units : null;
 
-    const buySt = buy ? H.normalizeOrdSt(H.pick(buy, 'ordSt', 'orderStatus', 'status', 'st')) : '';
+    const buySt = displayBuy ? H.normalizeOrdSt(H.pick(displayBuy, 'ordSt', 'orderStatus', 'status', 'st')) : '';
     const sellSt = sell ? H.normalizeOrdSt(H.pick(sell, 'ordSt', 'orderStatus', 'status', 'st')) : '';
 
     const pt = sell
@@ -128,6 +143,22 @@ class KotakMonitor {
     const isLimit = pt === 'L';
     const isSl = pt === 'SL';
 
+    let buyPayload = null;
+    if (displayBuy) {
+      const dp = H.getOrderPrice(displayBuy);
+      const dq = H.getOrderQtyRaw(displayBuy);
+      buyPayload = {
+        nOrdNo: String(displayBuy.nOrdNo ?? displayBuy.ordNo ?? ''),
+        status: buySt,
+        symbol: H.pick(displayBuy, 'trdSym', 'tsym', 'sym', 'symbol'),
+        price: Number.isFinite(dp) ? dp : null,
+        qty: dq != null ? Number(dq) : null,
+        qtyDisplay: dq != null ? String(dq) : '—',
+        avgPrc: displayBuy.avgPrc != null ? Number(displayBuy.avgPrc) : null,
+        instrumentKey: H.instrumentKey(displayBuy)
+      };
+    }
+
     return {
       ts: Date.now(),
       loginOk: !!this.auth,
@@ -137,18 +168,7 @@ class KotakMonitor {
         hasOpenPosition: this.hasOpenPositionForCurrentBuy,
         hasCorrespondingSell: this.hasCorrespondingSellForCurrentBuy
       },
-      buy: buy
-        ? {
-            nOrdNo: String(buy.nOrdNo ?? buy.ordNo ?? ''),
-            status: buySt,
-            symbol: H.pick(buy, 'trdSym', 'tsym', 'sym', 'symbol'),
-            price: Number.isFinite(buyPrice) ? buyPrice : null,
-            qty: qtyRaw != null ? Number(qtyRaw) : null,
-            qtyDisplay: qtyRaw != null ? String(qtyRaw) : '—',
-            avgPrc: buy.avgPrc != null ? Number(buy.avgPrc) : null,
-            instrumentKey: H.instrumentKey(buy)
-          }
-        : null,
+      buy: buyPayload,
       sell: sell
         ? {
             nOrdNo: String(sell.nOrdNo ?? sell.ordNo ?? ''),
@@ -176,7 +196,9 @@ class KotakMonitor {
         effectiveUnits: units,
         entryActive: this.entryActive,
         onlyLiveLtp: this.onlyLiveLtp,
-        scriptName: buy ? (buy.trdSym ?? buy.tsym ?? buy.sym ?? buy.symbol ?? buy.scripName ?? '') : '',
+        scriptName: anchorBuy
+          ? (anchorBuy.trdSym ?? anchorBuy.tsym ?? anchorBuy.sym ?? anchorBuy.symbol ?? anchorBuy.scripName ?? '')
+          : '',
         realizedAvailable: !this.hasOpenPositionForCurrentBuy && (pointsTaken != null) && (lastTradePnlRs != null)
       },
       slHistory: this.slHistory,
@@ -190,6 +212,11 @@ class KotakMonitor {
     const sells = all.filter((o) => TR_SELL.has(trnsTpNorm(o)));
     buys.sort((a, b) => sortKey(b) - sortKey(a));
     sells.sort((a, b) => sortKey(b) - sortKey(a));
+
+    const completedBuys = buys.filter(
+      (b) => H.normalizeOrdSt(H.pick(b, 'ordSt', 'orderStatus', 'status', 'st')) === H.ORD_ST.COMPLETE
+    );
+    this.lastCompletedBuy = completedBuys[0] || null;
 
     this.latestBuy = buys[0] || null;
 
